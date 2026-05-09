@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pymongo
+python-dotenv
+python-multipart
+pymupdf
+requests
+redis
+PyPDF2
