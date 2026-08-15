@@ -88,14 +88,21 @@ Content:
         parsed = {"raw": response}
 
     # 🔥 SAVE
-    flashcards_collection.insert_one({
-        "user_id": user_id,
-        "doc_id": doc_id,
-        "data": parsed,
-        "count": count,
-        "topic": topic,
-        "difficulty": difficulty
-    })
+    flashcards_collection.update_one(
+        {
+            "user_id": user_id,
+            "doc_id": doc_id,
+            "count": count,
+            "topic": topic,
+            "difficulty": difficulty
+        },
+        {
+            "$set": {
+                "data": parsed
+            }
+        },
+        upsert=True
+    )
 
     return parsed
 
@@ -264,14 +271,21 @@ Content:
         return new_data
 
     # ✅ FIRST SAVE
-    quiz_collection.insert_one({
-        "user_id": user_id,
-        "doc_id": doc_id,
-        "data": valid,
-        "count": count,
-        "topic": topic,
-        "difficulty": difficulty
-    })
+    quiz_collection.update_one(
+        {
+            "user_id": user_id,
+            "doc_id": doc_id,
+            "topic": topic,
+            "difficulty": difficulty
+        },
+        {
+            "$set": {
+                "data": valid,
+                "count": count
+            }
+        },
+        upsert=True
+    )
 
     return valid
 

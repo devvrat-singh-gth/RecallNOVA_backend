@@ -1,20 +1,38 @@
-from fastapi import APIRouter
+# app/routes/chat.py
+
+from datetime import datetime, timezone
 from uuid import uuid4
-from datetime import datetime
+
 from bson import ObjectId
+from bson.errors import InvalidId
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+)
 
 from app.db.mongo import (
     chat_sessions,
-    documents
+    documents,
 )
 
-from app.schemas.chat import ChatRequest
+from app.dependencies.auth import (
+    get_current_user
+)
+
+from app.schemas.chat import (
+    ChatRequest
+)
 
 from app.services.rag_service import (
     search_docs_by_id
 )
 
-from app.services.llm_service import ask_llm
+from app.services.llm_service import (
+    ask_llm
+)
 
 from app.services.guard_service import (
     check_rate_limit,
@@ -26,11 +44,22 @@ from app.services.cache_service import (
     save_cache
 )
 
+from app.services.plan_service import (
+    ensure_usage_available
+)
+
+from app.services.usage_service import (
+    increment_usage
+)
+
+
 router = APIRouter()
 
 
-# 🔥 CHAT TITLE
-def generate_title(question: str, doc_id=None):
+def generate_title(
+    question: str,
+    doc_id=None
+):
 
     title = question.strip()
 
@@ -47,112 +76,118 @@ def generate_title(question: str, doc_id=None):
 
             if doc and doc.get("name"):
 
-                name = (
-                    doc["name"]
-                    .replace(".pdf", "")
+                name = doc["name"]
+
+                if name.lower().endswith(".pdf"):
+                    name = name[:-4]
+
+                return (
+                    f"{name} • {title}"
                 )
 
-                return f"{name} • {title}"
-
-        except:
+        except (
+            InvalidId,
+            TypeError
+        ):
             pass
 
     return title
 
 
-# 🔥 CREATE CHAT / MESSAGE
 @router.post("/")
-def chat(req: ChatRequest):
+def chat(
+    req: ChatRequest,
+    current_user=Depends(
+        get_current_user
+    )
+):
 
-    try:
+    user_id = str(
+        current_user["_id"]
+    )
 
-        # 🔥 RATE LIMIT
-
-        if not check_rate_limit(req.user_id):
-
-            return {
-                "error": "Too many requests"
-            }
-
-        # 🔥 CHAT ID
-
-        chat_id = (
-            req.chat_id
-            or str(uuid4())
+    if not check_rate_limit(
+        user_id
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests"
         )
 
-        # 🔥 SANITIZE
+    ensure_usage_available(
+        current_user,
+        "messages"
+    )
+    chat_id = (
+        req.chat_id
+        or str(uuid4())
+    )
 
-        safe_q = token_guard(
-            req.question
+    safe_q = token_guard(
+        req.question
+    )
+    cached = get_cached_response(
+        user_id,
+        safe_q,
+        req.doc_id or "",
+        req.focus_mode or "balanced"
+    )
+
+    if cached:
+
+        existing = chat_sessions.find_one({
+            "chat_id": chat_id,
+            "user_id": user_id
+        })
+
+        now = datetime.now(
+            timezone.utc
         )
 
-        # 🔥 CACHE
+        if not existing:
 
-        cached = get_cached_response(
-            req.user_id,
-            safe_q,
-            req.doc_id,
-            req.focus_mode
-        )
+            chat_sessions.insert_one({
 
-        if cached:
-
-            existing = (
-                chat_sessions.find_one({
-                    "chat_id": chat_id,
-                    "user_id": req.user_id
-                })
-            )
-
-            if not existing:
-
-                chat_sessions.insert_one({
-
-                    "chat_id": chat_id,
-
-                    "user_id": req.user_id,
-
-                    "title": generate_title(
-                        req.question,
-                        req.doc_id
-                    ),
-
-                    "created_at":
-                    datetime.utcnow(),
-
-                    "updated_at":
-                    datetime.utcnow(),
-
-                    "messages": []
-                })
-
-            return {
-                "response": cached,
                 "chat_id": chat_id,
-                "cached": True
-            }
 
-        # 🔥 SEARCH DOCS
+                "user_id": user_id,
 
-        context = search_docs_by_id(
-            safe_q,
-            req.user_id,
-            req.doc_id,
-            req.focus_mode
-        )
+                "title": generate_title(
+                    req.question,
+                    req.doc_id
+                ),
 
-        if not context:
+                "created_at": now,
 
-            return {
-                "response":
-                "No relevant content found in selected documents.",
-                "chat_id": chat_id
-            }
+                "updated_at": now,
 
-        # 🔥 PROMPT
+                "messages": []
+            })
 
-        prompt = f"""
+        return {
+            "response": cached,
+            "chat_id": chat_id,
+            "cached": True
+        }
+
+    context = search_docs_by_id(
+        query=safe_q,
+        user_id=user_id,
+        doc_id=req.doc_id,
+        start_page=req.start_page,
+        end_page=req.end_page
+    )
+
+    if not context:
+
+        return {
+            "response":
+                "No relevant content found "
+                "in selected documents.",
+            "chat_id": chat_id
+        }
+
+    prompt = f"""
 You are RecallNova AI.
 
 STRICT RULES:
@@ -173,116 +208,102 @@ QUESTION:
 FINAL ANSWER:
 """
 
-        print(
-            "PROMPT LENGTH:",
-            len(prompt)
+    response = ask_llm(
+        prompt
+    )
+
+    if not response:
+        raise HTTPException(
+            status_code=503,
+            detail="AI service unavailable"
         )
 
-        # 🔥 LLM
+    save_cache(
+        user_id,
+        safe_q,
+        response,
+        req.doc_id or "",
+        req.focus_mode or "balanced"
+    )
 
-        response = ask_llm(prompt)
+    now = datetime.now(
+        timezone.utc
+    )
 
-        print(
-            "FINAL RESPONSE LENGTH:",
-            len(response)
-        )
+    chat_sessions.update_one(
 
-        print(
-            "RESPONSE PREVIEW:"
-        )
+        {
+            "chat_id": chat_id,
+            "user_id": user_id
+        },
 
-        print(response[:500])
-
-        # 🔥 SAVE CACHE
-
-        save_cache(
-            req.user_id,
-            safe_q,
-            response,
-            req.doc_id,
-            req.focus_mode
-        )
-
-        # 🔥 SAVE CHAT
-
-        chat_sessions.update_one(
-
-            {
-                "chat_id": chat_id,
-                "user_id": req.user_id
+        {
+            "$setOnInsert": {
+                "title": generate_title(
+                    req.question,
+                    req.doc_id
+                ),
+                "created_at": now,
             },
 
-            {
+            "$set": {
+                "updated_at": now,
+                "selected_doc": req.doc_id,
+                "start_page": req.start_page,
+                "end_page": req.end_page,
+            },
 
-                "$setOnInsert": {
-
-                    "title": generate_title(
+            "$push": {
+                "messages": {
+                    "question":
                         req.question,
-                        req.doc_id
-                    ),
-
-                    "created_at":
-                    datetime.utcnow()
-                },
-
-                "$set": {
-
-                    "updated_at":
-                    datetime.utcnow()
-                },
-
-                "$push": {
-
-                    "messages": {
-
-                        "question":
-                        req.question,
-
-                        "response":
+                    "response":
                         response,
-
-                        "created_at":
-                        datetime.utcnow()
-                    }
+                    "created_at":
+                        now,
                 }
-            },
+            }
+        },
 
-            upsert=True
-        )
+        upsert=True
+    )
+    increment_usage(
+        user_id,
+        current_user.get(
+            "timezone",
+            "UTC"
+        ),
+        "messages"
+    )
 
-        return {
-            "response": response,
-            "chat_id": chat_id
-        }
-
-    except Exception as e:
-
-        print("CHAT ERROR:", e)
-
-        return {
-            "error": str(e)
-        }
+    return {
+        "response": response,
+        "chat_id": chat_id
+    }
 
 
-# 🔥 GET ALL CHATS
 @router.get("/sessions")
-def get_sessions(user_id: str):
+def get_sessions(
+    current_user=Depends(
+        get_current_user
+    )
+):
+
+    user_id = str(
+        current_user["_id"]
+    )
 
     chats = list(
-
         chat_sessions.find(
-
             {
                 "user_id": user_id
             },
-
             {
                 "_id": 0,
                 "chat_id": 1,
                 "title": 1,
                 "updated_at": 1
             }
-
         ).sort(
             "updated_at",
             -1
@@ -294,20 +315,23 @@ def get_sessions(user_id: str):
     }
 
 
-# 🔥 GET SINGLE CHAT
 @router.get("/{chat_id}")
 def get_chat(
     chat_id: str,
-    user_id: str
+    current_user=Depends(
+        get_current_user
+    )
 ):
 
-    chat = chat_sessions.find_one(
+    user_id = str(
+        current_user["_id"]
+    )
 
+    chat = chat_sessions.find_one(
         {
             "chat_id": chat_id,
             "user_id": user_id
         },
-
         {
             "_id": 0
         }
@@ -315,26 +339,32 @@ def get_chat(
 
     if not chat:
 
-        return {
-            "error": "Chat not found"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Chat not found"
+        )
 
     return chat
 
 
-# 🔥 DELETE CHAT
 @router.delete("/{chat_id}")
 def delete_chat(
     chat_id: str,
-    user_id: str
+    current_user=Depends(
+        get_current_user
+    )
 ):
 
-    chat_sessions.delete_one({
+    user_id = str(
+        current_user["_id"]
+    )
 
+    result = chat_sessions.delete_one({
         "chat_id": chat_id,
         "user_id": user_id
     })
 
     return {
-        "success": True
+        "success": True,
+        "deleted": result.deleted_count > 0
     }

@@ -36,8 +36,10 @@ def get_cached_response(
             focus_mode
         )
 
-        return r.get(key)
+        if not r:
+            return None
 
+        return r.get(key)
     except Exception:
 
         return None
@@ -60,6 +62,8 @@ def save_cache(
             doc_id,
             focus_mode
         )
+        if not r:
+            return
 
         r.setex(
             key,

@@ -71,9 +71,8 @@ def ask_llm(prompt: str):
         print(content[:500])
 
         return content
-
     except Exception as e:
 
         print(f"❌ LLM ERROR: {e}")
 
-        return "AI service temporarily unavailable."
+        return None

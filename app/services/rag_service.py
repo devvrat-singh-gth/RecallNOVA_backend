@@ -2,20 +2,38 @@ from fastapi import UploadFile
 import fitz
 from app.utils.hash_utils import generate_hash
 from app.db.mongo import documents
-from app.config import MAX_PDF_MB
+from app.settings import MAX_PDF_MB
 from bson import ObjectId
 
 
 
 def extract_text_from_pdf(content):
-    doc = fitz.open(stream=content, filetype="pdf")
-    text = ""
 
-    for page in doc:
-        text += page.get_text()
+    doc = fitz.open(
+        stream=content,
+        filetype="pdf"
+    )
 
-    return text.strip()
+    full_text = ""
 
+    pages = []
+
+    for page_num, page in enumerate(doc):
+
+        page_text = page.get_text()
+
+        full_text += page_text + "\n"
+
+        pages.append({
+            "page": page_num + 1,
+            "text": page_text
+        })
+
+    return {
+        "text": full_text.strip(),
+        "pages": pages,
+        "total_pages": len(pages)
+    }
 
 def process_pdf(file: UploadFile, user_id):
     content = file.file.read()   # 🔥 FIX
@@ -32,19 +50,31 @@ def process_pdf(file: UploadFile, user_id):
 
     if existing:
         return {"message": "Already uploaded"}
+    pdf_data = extract_text_from_pdf(content)
 
-    text = extract_text_from_pdf(content)
-
-    if not text:
-        return {"error": "Could not extract text from PDF"}
+    if not pdf_data["text"]:
+        return {
+            "error":
+            "Could not extract text from PDF"
+        }
 
     filename = file.filename or "Untitled.pdf"   # 🔥 REAL FIX
 
     result = documents.insert_one({
+
         "user_id": user_id,
+
         "hash": doc_hash,
-        "text": text,
+
+        "text": pdf_data["text"],
+
+        "pages": pdf_data["pages"],
+
+        "total_pages":
+        pdf_data["total_pages"],
+
         "name": filename,
+
         "size": len(content)
     })
 
@@ -60,7 +90,26 @@ def search_docs(query, user_id):
     scored_chunks = []
 
     for doc in docs:
-        original_text = doc.get("text", "")
+        pages = doc.get("pages")
+
+        # NEW PDFs
+
+        if pages:
+
+            original_text = "\n".join(
+                p.get("text", "")
+                for p in pages
+            )
+
+        # OLD PDFs
+
+        else:
+
+            original_text = doc.get(
+                "text",
+                ""
+            )
+
         text_lower = original_text.lower()
 
         # 🔥 chunking (keep original + lower)
@@ -94,14 +143,20 @@ def search_docs_by_id(
     query,
     user_id,
     doc_id=None,
-    focus_mode="balanced"
+    start_page=None,
+    end_page=None
 ):
 
     if doc_id:
 
+        try:
+            object_id = ObjectId(doc_id)
+        except Exception:
+            return ""
+
         docs = documents.find({
             "user_id": user_id,
-            "_id": ObjectId(doc_id)
+            "_id": object_id
         })
 
     else:
@@ -116,84 +171,76 @@ def search_docs_by_id(
 
     for doc in docs:
 
-        original_text = doc.get("text", "")
-        text_lower = original_text.lower()
+        pages = doc.get("pages", [])
 
-        # 🔥 SMARTER CHUNK SIZE
-        chunk_size = 700
-        overlap = 120
+        if pages:
 
-        chunks = []
+            selected_pages = pages
 
-        for i in range(
-            0,
-            len(original_text),
-            chunk_size - overlap
-        ):
+            if (
+                start_page is not None
+                and end_page is not None
+            ):
+                selected_pages = [
 
-            original_chunk = original_text[
-                i:i + chunk_size
-            ]
+                    p for p in pages
 
-            lower_chunk = text_lower[
-                i:i + chunk_size
-            ]
+                    if start_page
+                    <= p["page"]
+                    <= end_page
+                ]
 
-            chunks.append((
-                i,
-                original_chunk,
-                lower_chunk
-            ))
+            for page in selected_pages:
 
-        total_chunks = len(chunks)
+                text = page.get(
+                    "text",
+                    ""
+                )
 
-        for idx, (
-            position,
-            original_chunk,
-            chunk_lower
-        ) in enumerate(chunks):
+                lower = text.lower()
+
+                score = 0
+
+                for word in query_words:
+
+                    if word in lower:
+                        score += 3
+
+                if query.lower() in lower:
+                    score += 10
+
+                if score > 0:
+
+                    scored_chunks.append({
+                        "score": score,
+                        "chunk": text,
+                        "page": page["page"]
+                    })
+
+        else:
+
+            text = doc.get(
+                "text",
+                ""
+            )
+
+            lower = text.lower()
 
             score = 0
 
-            # 🔥 QUERY MATCHING
             for word in query_words:
 
-                if word in chunk_lower:
+                if word in lower:
                     score += 3
 
-            # 🔥 PHRASE BOOST
-            if query.lower() in chunk_lower:
+            if query.lower() in lower:
                 score += 10
 
-            # 🔥 CONTENT BOOST
-            if len(original_chunk) > 300:
-                score += 1
-
-            # 🔥 FOCUS MODE BOOST
-            if focus_mode == "start":
-                score += max(
-                    0,
-                    20 - idx
-                )
-
-            elif focus_mode == "middle":
-
-                middle = total_chunks / 2
-
-                score += max(
-                    0,
-                    20 - abs(idx - middle)
-                )
-
-            elif focus_mode == "end":
-
-                score += idx
-
-            if score > 2:
+            if score > 0:
 
                 scored_chunks.append({
                     "score": score,
-                    "chunk": original_chunk
+                    "chunk": text
                 })
 
     scored_chunks.sort(
@@ -202,8 +249,8 @@ def search_docs_by_id(
     )
 
     top_chunks = [
-        c["chunk"]
-        for c in scored_chunks[:4]
+        x["chunk"]
+        for x in scored_chunks[:5]
     ]
 
     return "\n\n".join(top_chunks)

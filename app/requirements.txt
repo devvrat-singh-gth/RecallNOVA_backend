@@ -6,4 +6,11 @@ python-multipart
 pymupdf
 requests
 redis
+tzdata
+email-validator
+resend
 PyPDF2
+PyJWT
+cryptography
+google-auth
+google-auth-oauthlib

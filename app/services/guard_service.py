@@ -9,8 +9,10 @@ def check_rate_limit(user_id: str):
     key = f"rate:{user_id}"
 
     try:
-        current = r.get(key)
+        if not r:
+            return True
 
+        current = r.get(key)
         if current and int(current) >= MAX_REQUESTS:
             return False
 

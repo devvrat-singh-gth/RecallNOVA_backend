@@ -1,5 +1,3 @@
-# app/routes/dashboard.py
-
 from fastapi import (
     APIRouter,
     Depends,
@@ -11,21 +9,17 @@ from app.dependencies.auth import (
     get_current_user
 )
 
-
 router = APIRouter()
-
 
 @router.get("/")
 def dashboard(
-    current_user=Depends(
+    current_user = Depends(
         get_current_user
     )
 ):
-
     user_id = str(
-        current_user["_id"]
-    )
-
+    current_user["_id"]
+)
     docs = list(
         db["documents"].find({
             "user_id": user_id
@@ -50,9 +44,7 @@ def dashboard(
         })
     )
 
-    document_count = len(
-        docs
-    )
+    document_count = len(docs)
 
     flashcard_count = sum(
         len(f.get("data", []))
@@ -74,27 +66,21 @@ def dashboard(
         ]
 
         accuracy = round(
-            sum(scores)
-            / len(scores),
+            sum(scores) / len(scores),
             1
         )
 
     learning_progress = min(
         100,
-        document_count * 15
-        + flashcard_count // 2
-        + quiz_count
+        document_count * 15 +
+        flashcard_count // 2 +
+        quiz_count
     )
 
     return {
-        "documents":
-            document_count,
-        "flashcards":
-            flashcard_count,
-        "quiz_questions":
-            quiz_count,
-        "accuracy":
-            accuracy,
-        "progress":
-            learning_progress,
+        "documents": document_count,
+        "flashcards": flashcard_count,
+        "quiz_questions": quiz_count,
+        "accuracy": accuracy,
+        "progress": learning_progress
     }

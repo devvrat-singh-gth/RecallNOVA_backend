@@ -1,5 +1,5 @@
 import requests
-from app.config import HF_API_KEY
+from app.settings import HF_API_KEY
 
 API_URL = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
 
