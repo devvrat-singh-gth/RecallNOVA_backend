@@ -8,7 +8,6 @@ from pydantic import (
     Field,
 )
 
-
 # ============================================================
 # GOOGLE AUTH
 # ============================================================
@@ -20,6 +19,16 @@ class GoogleLoginRequest(BaseModel):
 
     timezone: Optional[str] = None
 
+    guest_id: Optional[str] = None
+
+# ============================================================
+# GUEST SESSION
+# ============================================================
+
+class GuestSessionRequest(BaseModel):
+    timezone: Optional[str] = None
+
+    guest_id: Optional[str] = None
 
 # ============================================================
 # GENERAL AUTH
@@ -57,10 +66,11 @@ class UsageResponse(BaseModel):
 
 
 # ============================================================
-# EMAIL AUTH
+# NATIVE EMAIL AUTH
 # ============================================================
 
 class EmailSignupRequest(BaseModel):
+
     email: EmailStr
 
     password: str = Field(
@@ -75,32 +85,13 @@ class EmailSignupRequest(BaseModel):
 
     timezone: Optional[str] = None
 
+    guest_id: Optional[str] = None
+
 
 class EmailLoginRequest(BaseModel):
     email: EmailStr
 
     password: str = Field(
         min_length=1,
-        max_length=128,
-    )
-
-
-class VerifyEmailRequest(BaseModel):
-    token: str = Field(
-        min_length=1,
-    )
-
-
-class ForgotPasswordRequest(BaseModel):
-    email: EmailStr
-
-
-class ResetPasswordRequest(BaseModel):
-    token: str = Field(
-        min_length=1,
-    )
-
-    password: str = Field(
-        min_length=8,
         max_length=128,
     )

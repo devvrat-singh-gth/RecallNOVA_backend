@@ -19,7 +19,7 @@ from app.db.mongo import (
 )
 
 from app.dependencies.auth import (
-    get_current_user
+    get_current_identity,
 )
 
 from app.schemas.chat import (
@@ -45,7 +45,8 @@ from app.services.cache_service import (
 )
 
 from app.services.plan_service import (
-    ensure_usage_available
+    ensure_usage_available,
+    get_resource_limit,
 )
 
 from app.services.usage_service import (
@@ -69,9 +70,9 @@ def generate_title(
     if doc_id:
 
         try:
-
             doc = documents.find_one({
-                "_id": ObjectId(doc_id)
+                "_id": ObjectId(doc_id),
+                "user_id": user_id
             })
 
             if doc and doc.get("name"):
@@ -97,9 +98,9 @@ def generate_title(
 @router.post("/")
 def chat(
     req: ChatRequest,
-    current_user=Depends(
-        get_current_user
-    )
+current_user=Depends(
+    get_current_identity
+)
 ):
 
     user_id = str(
@@ -107,7 +108,11 @@ def chat(
     )
 
     if not check_rate_limit(
-        user_id
+        user_id,
+        current_user.get(
+            "plan",
+            "free",
+        ),
     ):
         raise HTTPException(
             status_code=429,
@@ -122,7 +127,44 @@ def chat(
         req.chat_id
         or str(uuid4())
     )
+    existing_chat = chat_sessions.find_one(
+        {
+            "chat_id": chat_id,
+            "user_id": user_id,
+        },
+        {
+            "_id": 1,
+        },
+    )
 
+    if (
+        not existing_chat
+        and not req.chat_id
+    ):
+        chat_limit = get_resource_limit(
+            current_user,
+            "chat_sessions",
+        )
+
+        current_chat_count = (
+            chat_sessions.count_documents(
+                {
+                    "user_id": user_id,
+                }
+            )
+        )
+
+        if current_chat_count >= chat_limit:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code":
+                        "chat_session_limit_reached",
+
+                    "message":
+                        "Chat session limit reached.",
+                },
+            )
     safe_q = token_guard(
         req.question
     )
@@ -160,6 +202,10 @@ def chat(
                 "created_at": now,
 
                 "updated_at": now,
+
+                "guest_data": user_id.startswith(
+                    "guest_"
+                ),
 
                 "messages": []
             })
@@ -239,11 +285,17 @@ FINAL ANSWER:
 
         {
             "$setOnInsert": {
+
                 "title": generate_title(
                     req.question,
                     req.doc_id
                 ),
+
                 "created_at": now,
+
+                "guest_data": user_id.startswith(
+                    "guest_"
+                ),
             },
 
             "$set": {
@@ -284,9 +336,9 @@ FINAL ANSWER:
 
 @router.get("/sessions")
 def get_sessions(
-    current_user=Depends(
-        get_current_user
-    )
+current_user=Depends(
+    get_current_identity
+)
 ):
 
     user_id = str(
@@ -318,9 +370,9 @@ def get_sessions(
 @router.get("/{chat_id}")
 def get_chat(
     chat_id: str,
-    current_user=Depends(
-        get_current_user
-    )
+current_user=Depends(
+    get_current_identity
+)
 ):
 
     user_id = str(
@@ -350,9 +402,9 @@ def get_chat(
 @router.delete("/{chat_id}")
 def delete_chat(
     chat_id: str,
-    current_user=Depends(
-        get_current_user
-    )
+current_user=Depends(
+    get_current_identity
+)
 ):
 
     user_id = str(

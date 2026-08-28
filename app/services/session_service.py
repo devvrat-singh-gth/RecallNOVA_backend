@@ -55,10 +55,9 @@ def create_refresh_session(
 
             "user_id": user_id,
 
-            "token_hash":
-                hash_token(
-                    raw_token
-                ),
+            "token_hash": hash_token(
+                raw_token
+            ),
 
             "created_at": now,
 
@@ -74,6 +73,8 @@ def create_refresh_session(
             "revoked": False,
 
             "revoked_at": None,
+
+            "rotated_at": None,
         }
     )
 
@@ -93,8 +94,8 @@ def get_session(
     """
     Validate an active refresh token.
 
-    The raw token is never stored in MongoDB.
-    Only its SHA-256 hash is stored.
+    Raw refresh credentials are never stored
+    in MongoDB.
     """
 
     now = datetime.now(
@@ -103,10 +104,9 @@ def get_session(
 
     return auth_sessions.find_one_and_update(
         {
-            "token_hash":
-                hash_token(
-                    raw_token
-                ),
+            "token_hash": hash_token(
+                raw_token
+            ),
 
             "revoked": False,
 
@@ -133,21 +133,11 @@ def rotate_session(
 ):
     """
     Rotate the refresh credential while
-    preserving the same MongoDB session.
+    preserving the same persistent session_id.
 
-    One login:
-        session_id = A
-
-    refresh:
-        session_id = A
-        token hash changes
-
-    refresh again:
-        session_id = A
-        token hash changes again
-
-    This avoids creating a new MongoDB
-    session document on every refresh.
+    The atomic find_one_and_update ensures
+    concurrent reuse of the same token does
+    not produce multiple successful rotations.
     """
 
     old_hash = hash_token(
@@ -181,17 +171,16 @@ def rotate_session(
             },
             {
                 "$set": {
-                    "token_hash":
-                        new_hash,
+                    "token_hash": new_hash,
 
-                    "last_used_at":
-                        now,
+                    "last_used_at": now,
 
-                    "rotated_at":
-                        now,
+                    "rotated_at": now,
                 }
             },
-            return_document=ReturnDocument.AFTER,
+            return_document=(
+                ReturnDocument.AFTER
+            ),
         )
     )
 
@@ -213,10 +202,9 @@ def revoke_session(
 ):
     result = auth_sessions.update_one(
         {
-            "token_hash":
-                hash_token(
-                    raw_token
-                ),
+            "token_hash": hash_token(
+                raw_token
+            ),
 
             "revoked": False,
         },

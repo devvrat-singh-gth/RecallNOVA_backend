@@ -1,7 +1,10 @@
 from app.services.llm_service import ask_llm
 from app.db.mongo import db
 from bson import ObjectId
-
+from datetime import (
+    datetime,
+    timezone,
+)
 flashcards_collection = db["flashcards"]
 quiz_collection = db["quizzes"]
 
@@ -98,7 +101,22 @@ Content:
         },
         {
             "$set": {
-                "data": parsed
+
+                "data": parsed,
+
+                "count": count,
+
+                "topic": topic,
+
+                "difficulty": difficulty,
+
+                "created_at": datetime.now(
+                    timezone.utc
+                ),
+
+                "guest_data": user_id.startswith(
+                    "guest_"
+                )
             }
         },
         upsert=True
@@ -106,10 +124,6 @@ Content:
 
     return parsed
 
-
-# =========================
-# ✅ QUIZ
-# =========================
 # =========================
 # ✅ QUIZ
 # =========================
@@ -119,38 +133,60 @@ def generate_quiz(
     topic="",
     difficulty="medium",
     doc_id=None,
-    force_new=False
+    force_new=False,
 ):
-
-    # ✅ SAFE LIMIT
-    count = min(max(count, 1), 10)
+    count = min(
+        max(
+            int(count),
+            1,
+        ),
+        10,
+    )
 
     if difficulty == "auto":
-        difficulty = get_user_level(user_id, doc_id)
+        difficulty = get_user_level(
+            user_id,
+            doc_id,
+        )
 
-    existing_doc = quiz_collection.find_one({
-        "user_id": user_id,
-        "doc_id": doc_id,
-        "topic": topic,
-        "difficulty": difficulty
-    })
+    existing_doc = (
+        quiz_collection.find_one(
+            {
+                "user_id": user_id,
 
-    # ✅ START BUTTON
-    if existing_doc and not force_new:
-        return existing_doc.get("data", [])
+                "doc_id": doc_id,
 
-    # ✅ GET CONTEXT
-    context = get_doc_text(user_id, doc_id)
+                "topic": topic,
+
+                "difficulty":
+                    difficulty,
+
+                "count": count,
+            }
+        )
+    )
+
+    if (
+        existing_doc
+        and existing_doc.get("data")
+        and not force_new
+    ):
+        return existing_doc["data"]
+
+    context = get_doc_text(
+        user_id,
+        doc_id,
+    )
 
     if not context:
-        return existing_doc.get("data", []) if existing_doc else []
+        return []
 
-    # ✅ SMALLER CONTEXT = BETTER JSON STABILITY
     context = context[:2000]
 
     topic_instruction = (
         f"Focus more on: {topic}"
-        if topic else ""
+        if topic
+        else ""
     )
 
     prompt = f"""
@@ -184,107 +220,96 @@ Content:
 {context}
 """
 
-    print("PROMPT LENGTH:", len(prompt))
+    response = ask_llm(
+        prompt
+    )
 
-    response = ask_llm(prompt)
-
-    print("LLM RESPONSE:")
-    print(response)
     import json
-    import re
-
-    valid = []
-
-    print("REQUESTED COUNT:", count)
-    print("RAW RESPONSE LENGTH:", len(response))
 
     try:
-
-        # ✅ FIND FIRST [ AND LAST ]
         start = response.find("[")
         end = response.rfind("]")
 
         if start == -1 or end == -1:
-            print("❌ NO JSON ARRAY FOUND")
+            return []
 
-            print("RAW RESPONSE:")
-            print(response)
-
-            return existing_doc.get("data", []) if existing_doc else []
-
-        json_text = response[start:end + 1]
-
-        print("JSON LENGTH:", len(json_text))
-
-        parsed = json.loads(json_text)
-
-        print("PARSED QUESTIONS:", len(parsed))
+        parsed = json.loads(
+            response[
+                start:end + 1
+            ]
+        )
 
         valid = [
-            q for q in parsed
-            if isinstance(q, dict)
-            and q.get("question")
-            and isinstance(q.get("options"), list)
-            and len(q["options"]) == 4
-            and q.get("answer") in ["A", "B", "C", "D"]
+            question
+            for question in parsed
+            if (
+                isinstance(
+                    question,
+                    dict,
+                )
+                and question.get(
+                    "question"
+                )
+                and isinstance(
+                    question.get(
+                        "options"
+                    ),
+                    list,
+                )
+                and len(
+                    question[
+                        "options"
+                    ]
+                ) == 4
+                and question.get(
+                    "answer"
+                ) in {
+                    "A",
+                    "B",
+                    "C",
+                    "D",
+                }
+            )
         ]
 
-        print("VALID QUESTIONS:", len(valid))
+    except Exception:
+        return []
 
-    except Exception as e:
+    if not valid:
+        return []
 
-        print("❌ PARSE ERROR:", e)
+    valid = valid[:count]
 
-        print("RAW RESPONSE:")
-        print(response)
-
-        valid = []
-
-        return existing_doc.get("data", []) if existing_doc else []
-
-    # ✅ MERGE
-    MAX_TOTAL = 100
-
-    if existing_doc:
-
-        current_data = existing_doc.get("data", [])
-
-        existing_questions = set(
-            q["question"]
-            for q in current_data
-            if "question" in q
-        )
-
-        filtered_new = [
-            q for q in valid
-            if q["question"] not in existing_questions
-        ]
-
-        new_data = current_data + filtered_new
-        new_data = new_data[:MAX_TOTAL]
-
-        quiz_collection.update_one(
-            {"_id": existing_doc["_id"]},
-            {"$set": {"data": new_data}}
-        )
-
-        return new_data
-
-    # ✅ FIRST SAVE
     quiz_collection.update_one(
         {
             "user_id": user_id,
+
             "doc_id": doc_id,
+
             "topic": topic,
-            "difficulty": difficulty
+
+            "difficulty":
+                difficulty,
+
+            "count": count,
         },
         {
             "$set": {
+
                 "data": valid,
-                "count": count
-            }
+
+                "count": count,
+
+                "created_at": datetime.now(
+                    timezone.utc
+                ),
+
+                "guest_data": user_id.startswith(
+                    "guest_"
+                )
+            },
         },
-        upsert=True
+        upsert=True,
     )
 
     return valid

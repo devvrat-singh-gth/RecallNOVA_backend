@@ -4,6 +4,7 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    HTTPException,
     UploadFile,
 )
 
@@ -13,9 +14,11 @@ from bson.errors import InvalidId
 from app.db.mongo import documents
 
 from app.dependencies.auth import (
-    get_current_user
+    get_current_identity,
 )
-
+from app.services.plan_service import (
+    get_resource_limit,
+)
 from app.services.rag_service import (
     process_pdf
 )
@@ -26,9 +29,9 @@ router = APIRouter()
 
 @router.get("/")
 def get_docs(
-    current_user=Depends(
-        get_current_user
-    )
+current_user=Depends(
+    get_current_identity
+)
 ):
 
     user_id = str(
@@ -68,27 +71,58 @@ def get_docs(
 @router.post("/upload")
 async def upload(
     file: UploadFile = File(...),
-    current_user=Depends(
-        get_current_user
-    )
+current_user=Depends(
+    get_current_identity
+)
 ):
 
     user_id = str(
         current_user["_id"]
     )
+    document_limit = get_resource_limit(
+        current_user,
+        "documents",
+    )
+
+    document_count = (
+        documents.count_documents(
+            {
+                "user_id": user_id,
+            }
+        )
+    )
+
+    if document_count >= document_limit:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code":
+                    "document_limit_reached",
+
+                "message":
+                    "Document limit reached.",
+            },
+        )
+    content = await file.read()
+
+    print(
+        "PDF SIZE:",
+        len(content)
+    )
 
     return process_pdf(
-        file,
-        user_id
+        file=file,
+        content=content,
+        user_id=user_id
     )
 
 
 @router.delete("/{doc_id}")
 def delete_doc(
     doc_id: str,
-    current_user=Depends(
-        get_current_user
-    )
+current_user=Depends(
+    get_current_identity
+)
 ):
 
     user_id = str(

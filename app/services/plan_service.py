@@ -1,20 +1,24 @@
 # app/services/plan_service.py
 
-from fastapi import HTTPException, status
+from fastapi import (
+    HTTPException,
+    status,
+)
 
 from app.config.plans import PLANS
+
 from app.services.usage_service import (
-    get_usage
+    get_usage,
 )
 
 
 def get_plan(
-    user
+    user,
 ) -> str:
 
     plan = user.get(
         "plan",
-        "free"
+        "free",
     )
 
     if plan not in PLANS:
@@ -24,7 +28,7 @@ def get_plan(
 
 
 def get_plan_config(
-    user
+    user,
 ):
     return PLANS[
         get_plan(user)
@@ -33,27 +37,31 @@ def get_plan_config(
 
 def get_resource_limit(
     user,
-    resource: str
+    resource: str,
 ) -> int:
 
-    config = get_plan_config(user)
+    config = get_plan_config(
+        user
+    )
 
     return config["limits"].get(
         resource,
-        0
+        0,
     )
 
 
 def get_usage_limit_status(
     user,
-    counter: str
+    counter: str,
 ):
-
-    plan_config = get_plan_config(user)
+    config = get_plan_config(
+        user
+    )
 
     limit_config = (
-        plan_config["limits"]
-        .get(counter)
+        config["limits"].get(
+            counter
+        )
     )
 
     if not limit_config:
@@ -65,74 +73,115 @@ def get_usage_limit_status(
         str(user["_id"]),
         user.get(
             "timezone",
-            "UTC"
+            "UTC",
+        ),
+    )
+
+    daily_used = int(
+        usage["daily"].get(
+            counter,
+            0,
         )
     )
 
-    current = int(
-        usage.get(counter, 0)
+    monthly_used = int(
+        usage["monthly"].get(
+            counter,
+            0,
+        )
     )
 
-    daily_limit = limit_config[
-        "daily"
-    ]
+    daily_limit = int(
+        limit_config["daily"]
+    )
 
-    monthly_limit = limit_config[
-        "monthly"
-    ]
+    monthly_limit = int(
+        limit_config["monthly"]
+    )
 
     return {
-        "used": current,
-        "daily_limit": daily_limit,
-        "monthly_limit": monthly_limit,
-        "daily_remaining": max(
-            0,
-            daily_limit - current
-        ),
-        "monthly_remaining": max(
-            0,
-            monthly_limit - current
-        ),
+        "used": daily_used,
+
+        "daily_used":
+            daily_used,
+
+        "monthly_used":
+            monthly_used,
+
+        "daily_limit":
+            daily_limit,
+
+        "monthly_limit":
+            monthly_limit,
+
+        "daily_remaining":
+            max(
+                0,
+                daily_limit - daily_used,
+            ),
+
+        "monthly_remaining":
+            max(
+                0,
+                monthly_limit - monthly_used,
+            ),
     }
 
 
 def ensure_usage_available(
     user,
     counter: str,
-    amount: int = 1
+    amount: int = 1,
 ):
-
-    status_data = get_usage_limit_status(
-        user,
-        counter
+    status_data = (
+        get_usage_limit_status(
+            user,
+            counter,
+        )
     )
 
     if (
-        status_data["daily_remaining"]
+        status_data[
+            "daily_remaining"
+        ]
         < amount
     ):
         raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            status_code=(
+                status.HTTP_429_TOO_MANY_REQUESTS
+            ),
             detail={
-                "code": "daily_limit_reached",
+                "code":
+                    "daily_limit_reached",
+
                 "message":
                     "Daily limit reached.",
-                "usage": status_data,
-            }
+
+                "usage":
+                    status_data,
+            },
         )
 
     if (
-        status_data["monthly_remaining"]
+        status_data[
+            "monthly_remaining"
+        ]
         < amount
     ):
         raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            status_code=(
+                status.HTTP_429_TOO_MANY_REQUESTS
+            ),
             detail={
-                "code": "monthly_limit_reached",
+                "code":
+                    "monthly_limit_reached",
+
                 "message":
                     "Monthly limit reached.",
-                "usage": status_data,
-            }
+
+                "usage":
+                    status_data,
+            },
         )
 
     return status_data
@@ -140,15 +189,18 @@ def ensure_usage_available(
 
 def build_limit_warning(
     user,
-    counter: str
+    counter: str,
 ):
-
-    status_data = get_usage_limit_status(
-        user,
-        counter
+    status_data = (
+        get_usage_limit_status(
+            user,
+            counter,
+        )
     )
 
-    config = get_plan_config(user)
+    config = get_plan_config(
+        user
+    )
 
     threshold = config[
         "warning_threshold"
@@ -176,15 +228,19 @@ def build_limit_warning(
         else 0
     )
 
-    warning = (
-        daily_ratio <= threshold
-        or monthly_ratio <= threshold
-    )
-
     return {
-        "warning": warning,
+        "warning": (
+            daily_ratio <= threshold
+            or monthly_ratio <= threshold
+        ),
+
         "remaining_daily":
-            status_data["daily_remaining"],
+            status_data[
+                "daily_remaining"
+            ],
+
         "remaining_monthly":
-            status_data["monthly_remaining"],
+            status_data[
+                "monthly_remaining"
+            ],
     }

@@ -5,13 +5,14 @@ from typing import Optional
 
 from bson import ObjectId
 
-from app.db.mongo import users
-from app.services.verification_service import (
-    get_token_expiry,
-    hash_token,
+from app.db.mongo import (
+    users,
+    documents,
+    chat_sessions,
+    flashcards,
+    quizzes,
+    quiz_progress,
 )
-
-
 # ============================================================
 # HELPERS
 # ============================================================
@@ -73,27 +74,26 @@ def create_user(
     picture: Optional[str],
     timezone_name: str,
 ):
-    now = datetime.now(
-        timezone.utc
-    )
+    now = datetime.now(timezone.utc)
 
-    email = normalize_email(
+    normalized_email = normalize_email(
         email
     )
 
     result = users.insert_one(
         {
             "google_id": google_id,
-            "email": email,
+
+            "email": normalized_email,
+
             "name": name,
+
             "picture": picture,
 
             "auth_provider": "google",
 
             "password_hash": None,
 
-            # Google has already verified
-            # ownership of the email address.
             "email_verified": True,
 
             "plan": "free",
@@ -103,7 +103,9 @@ def create_user(
             "disabled": False,
 
             "created_at": now,
+
             "updated_at": now,
+
             "last_login_at": now,
         }
     )
@@ -132,14 +134,17 @@ def update_user_login(
         {
             "$set": {
                 "name": name,
+
                 "picture": picture,
+
                 "timezone": timezone_name,
+
                 "updated_at": now,
+
                 "last_login_at": now,
 
-                # Google identity remains
-                # verified.
                 "email_verified": True,
+
                 "auth_provider": "google",
             }
         },
@@ -151,7 +156,7 @@ def update_user_login(
 
 
 # ============================================================
-# EMAIL USER CREATION
+# NATIVE EMAIL USER
 # ============================================================
 
 def create_email_user(
@@ -159,31 +164,18 @@ def create_email_user(
     password_hash: str,
     name: Optional[str],
     timezone_name: str,
-    verification_token: str,
 ):
     now = datetime.now(
         timezone.utc
     )
 
-    email = normalize_email(
+    normalized_email = normalize_email(
         email
-    )
-
-    verification_hash = hash_token(
-        verification_token
-    )
-
-    verification_expires = (
-        get_token_expiry()
     )
 
     result = users.insert_one(
         {
-            # Do not store google_id=None.
-            # The field should simply be absent
-            # for an email-authenticated user.
-
-            "email": email,
+            "email": normalized_email,
 
             "name": name,
 
@@ -193,16 +185,9 @@ def create_email_user(
 
             "password_hash": password_hash,
 
-            "email_verified": False,
-
-            "verification_token_hash":
-                verification_hash,
-
-            "verification_expires_at":
-                verification_expires,
-
-            # These fields are intentionally
-            # omitted until a reset is requested.
+            # Native accounts don't require
+            # email verification.
+            "email_verified": True,
 
             "plan": "free",
 
@@ -225,179 +210,8 @@ def create_email_user(
     )
 
 
-def delete_user_by_id(
-    user_id: str,
-):
-    try:
-        object_id = ObjectId(
-            user_id
-        )
-
-    except Exception:
-        return False
-
-    result = users.delete_one(
-        {
-            "_id": object_id,
-        }
-    )
-
-    return (
-        result.deleted_count > 0
-    )
-
-
 # ============================================================
-# EMAIL VERIFICATION
-# ============================================================
-
-def verify_email_token(
-    token: str,
-):
-    now = datetime.now(
-        timezone.utc
-    )
-
-    token_hash = hash_token(
-        token
-    )
-
-    user = users.find_one(
-        {
-            "verification_token_hash":
-                token_hash,
-
-            "verification_expires_at": {
-                "$gt": now,
-            },
-
-            "email_verified": False,
-        }
-    )
-
-    if not user:
-        return None
-
-    users.update_one(
-        {
-            "_id": user["_id"],
-        },
-        {
-            "$set": {
-                "email_verified": True,
-                "updated_at": now,
-            },
-            "$unset": {
-                "verification_token_hash": "",
-                "verification_expires_at": "",
-            },
-        },
-    )
-
-    return get_user_by_id(
-        str(user["_id"])
-    )
-
-
-# ============================================================
-# PASSWORD RESET TOKEN
-# ============================================================
-
-def create_password_reset_token(
-    user_id: str,
-    reset_token: str,
-):
-    now = datetime.now(
-        timezone.utc
-    )
-
-    try:
-        object_id = ObjectId(
-            user_id
-        )
-    except Exception:
-        raise ValueError(
-            "Invalid user id"
-        )
-
-    reset_hash = hash_token(
-        reset_token
-    )
-
-    expires_at = get_token_expiry()
-
-    users.update_one(
-        {
-            "_id": object_id,
-        },
-        {
-            "$set": {
-                "password_reset_token_hash":
-                    reset_hash,
-
-                "password_reset_expires_at":
-                    expires_at,
-
-                "updated_at": now,
-            },
-        },
-    )
-
-
-def reset_password(
-    token: str,
-    password_hash: str,
-):
-    now = datetime.now(
-        timezone.utc
-    )
-
-    token_hash = hash_token(
-        token
-    )
-
-    user = users.find_one(
-        {
-            "password_reset_token_hash":
-                token_hash,
-
-            "password_reset_expires_at": {
-                "$gt": now,
-            },
-        }
-    )
-
-    if not user:
-        return None
-
-    users.update_one(
-        {
-            "_id": user["_id"],
-        },
-        {
-            "$set": {
-                "password_hash":
-                    password_hash,
-
-                "auth_provider": "email",
-
-                "updated_at": now,
-            },
-
-            "$unset": {
-                "password_reset_token_hash": "",
-                "password_reset_expires_at": "",
-            },
-        },
-    )
-
-    return get_user_by_id(
-        str(user["_id"])
-    )
-
-
-# ============================================================
-# LOGIN METADATA
+# EMAIL LOGIN METADATA
 # ============================================================
 
 def update_email_login(
@@ -414,8 +228,9 @@ def update_email_login(
         {
             "$set": {
                 "last_login_at": now,
+
                 "updated_at": now,
-            },
+            }
         },
     )
 
@@ -439,6 +254,7 @@ def set_timezone(
         {
             "$set": {
                 "timezone": timezone_name,
+
                 "updated_at":
                     datetime.now(
                         timezone.utc
@@ -450,3 +266,29 @@ def set_timezone(
     return get_user_by_id(
         user_id
     )
+
+def migrate_guest_data(
+    guest_id: str,
+    user_id: str,
+):
+    collections = [
+        documents,
+        chat_sessions,
+        flashcards,
+        quizzes,
+        quiz_progress,
+    ]
+
+    for collection in collections:
+
+        collection.update_many(
+            {
+                "user_id": guest_id
+            },
+            {
+                "$set": {
+                    "user_id": user_id,
+                    "guest_data": False
+                }
+            }
+        )

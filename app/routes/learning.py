@@ -6,7 +6,10 @@ from fastapi import (
     HTTPException,
     Query,
 )
-
+from datetime import (
+    datetime,
+    timezone,
+)
 from app.db.mongo import (
     db,
     flashcards,
@@ -15,7 +18,7 @@ from app.db.mongo import (
 )
 
 from app.dependencies.auth import (
-    get_current_user
+    get_current_identity,
 )
 
 from app.services.learning_service import (
@@ -43,9 +46,9 @@ progress_collection = quiz_progress
 @router.get("/flashcards/check")
 def check_flashcards(
     doc_id: str,
-    current_user=Depends(
-        get_current_user
-    )
+current_user=Depends(
+    get_current_identity
+)
 ):
 
     user_id = str(
@@ -72,9 +75,9 @@ def check_flashcards(
 @router.get("/quiz/check")
 def check_quiz(
     doc_id: str,
-    current_user=Depends(
-        get_current_user
-    )
+current_user=Depends(
+    get_current_identity
+)
 ):
 
     user_id = str(
@@ -113,9 +116,9 @@ def flashcards_route(
         default="medium"
     ),
     doc_id: str | None = None,
-    current_user=Depends(
-        get_current_user
-    )
+current_user=Depends(
+    get_current_identity
+)
 ):
 
     allowed_difficulties = {
@@ -201,9 +204,9 @@ def quiz_route(
     ),
     doc_id: str | None = None,
     force_new: bool = False,
-    current_user=Depends(
-        get_current_user
-    )
+current_user=Depends(
+    get_current_identity
+)
 ):
 
     allowed_difficulties = {
@@ -222,21 +225,27 @@ def quiz_route(
     user_id = str(
         current_user["_id"]
     )
+    storage_difficulty = difficulty
 
-    existing = quiz_collection.find_one({
-        "user_id": user_id,
-        "doc_id": doc_id,
-        "topic": topic,
-        "difficulty": (
-            difficulty
-            if difficulty != "auto"
-            else {
-                "easy",
-                "medium",
-                "hard"
-            }
-        ),
-    })
+    if difficulty == "auto":
+        from app.services.learning_service import (
+            get_user_level,
+        )
+
+        storage_difficulty = get_user_level(
+            user_id,
+            doc_id,
+        )
+
+    existing = quiz_collection.find_one(
+        {
+            "user_id": user_id,
+            "doc_id": doc_id,
+            "topic": topic,
+            "difficulty": storage_difficulty,
+            "count": count,
+        }
+    )
 
     if existing and not force_new:
         data = existing.get(
@@ -286,9 +295,9 @@ def quiz_route(
 @router.post("/quiz/progress/save")
 def save_progress(
     payload: dict,
-    current_user=Depends(
-        get_current_user
-    )
+current_user=Depends(
+    get_current_identity
+)
 ):
 
     user_id = str(
@@ -316,7 +325,17 @@ def save_progress(
 
     safe_payload["user_id"] = user_id
     safe_payload["doc_id"] = doc_id
-
+    safe_payload["guest_data"] = (
+        user_id.startswith(
+            "guest_"
+        )
+    )
+    safe_payload["created_at"] = (
+    datetime.now(
+        timezone.utc
+        )
+    )
+        
     progress_collection.update_one(
         {
             "user_id": user_id,
@@ -336,9 +355,9 @@ def save_progress(
 @router.get("/quiz/progress")
 def get_progress(
     doc_id: str,
-    current_user=Depends(
-        get_current_user
-    )
+current_user=Depends(
+    get_current_identity
+)
 ):
 
     user_id = str(

@@ -1,9 +1,11 @@
 # app/routes/auth.py
 
 import os
-import secrets
-from urllib.parse import quote
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from zoneinfo import (
+    ZoneInfo,
+    ZoneInfoNotFoundError,
+)
 
 from fastapi import (
     APIRouter,
@@ -13,53 +15,51 @@ from fastapi import (
     Response,
     status,
 )
-from fastapi.responses import RedirectResponse
 
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 
 from app.dependencies.auth import (
+    get_current_identity,
     get_current_user,
 )
 
 from app.schemas.auth import (
     EmailLoginRequest,
     EmailSignupRequest,
-    ForgotPasswordRequest,
     GoogleLoginRequest,
-    ResetPasswordRequest,
+    GuestSessionRequest,
     TimezoneUpdateRequest,
-    VerifyEmailRequest,
 )
 
 from app.services.auth_service import (
     create_email_user,
-    create_password_reset_token,
     create_user,
-    delete_user_by_id,
     find_user_by_email,
     find_user_by_google_id,
     get_user_by_id,
-    reset_password,
     set_timezone,
     update_email_login,
     update_user_login,
-    verify_email_token,
 )
 
-from app.services.email_service import (
-    send_password_reset_email,
-    send_verification_email,
+from app.services.guest_service import (
+    create_guest_id,
 )
 
 from app.services.jwt_service import (
     create_access_token,
+    create_guest_access_token,
 )
 
 from app.services.password_service import (
     hash_password,
     verify_password,
 )
+
+# from app.services.guest_migration_service import (
+#     migrate_guest_data,
+# )
 
 from app.services.session_service import (
     create_refresh_session,
@@ -96,17 +96,8 @@ if not FRONTEND_URL:
         "FRONTEND_URL is not configured"
     )
 
-FRONTEND_URL = FRONTEND_URL.rstrip("/")
-
-
-EMAIL_VERIFY_PATH = os.getenv(
-    "EMAIL_VERIFY_PATH",
-    "/verify-email",
-)
-
-PASSWORD_RESET_PATH = os.getenv(
-    "PASSWORD_RESET_PATH",
-    "/reset-password",
+FRONTEND_URL = (
+    FRONTEND_URL.rstrip("/")
 )
 
 
@@ -137,7 +128,10 @@ COOKIE_DOMAIN = os.getenv(
 )
 
 if COOKIE_DOMAIN:
-    COOKIE_DOMAIN = COOKIE_DOMAIN.strip()
+    COOKIE_DOMAIN = (
+        COOKIE_DOMAIN.strip()
+        or None
+    )
 
 
 REFRESH_SESSION_DAYS = int(
@@ -174,14 +168,11 @@ def validate_origin(
     request: Request,
 ):
     """
-    Protect state-changing browser
-    requests that rely on authentication
-    cookies.
+    Protect browser state-changing
+    endpoints that rely on cookies.
 
-    The verification-link GET endpoint
-    intentionally does not use this,
-    because a user can legitimately arrive
-    there directly from an email.
+    The frontend origin must exactly match
+    FRONTEND_URL.
     """
 
     origin = request.headers.get(
@@ -190,7 +181,9 @@ def validate_origin(
 
     if origin != FRONTEND_URL:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=(
+                status.HTTP_403_FORBIDDEN
+            ),
             detail="Invalid request origin",
         )
 
@@ -207,9 +200,10 @@ def serialize_user(
             user["_id"]
         ),
 
-        "email": user[
-            "email"
-        ],
+        "email": user.get(
+            "email",
+            "",
+        ),
 
         "name": user.get(
             "name"
@@ -232,7 +226,7 @@ def serialize_user(
 
 
 # ============================================================
-# SESSION/COKIE HELPERS
+# COOKIE HELPERS
 # ============================================================
 
 def set_auth_cookies(
@@ -303,7 +297,9 @@ def create_authenticated_session(
 
     return {
         "access_token": access_token,
+
         "token_type": "bearer",
+
         "user": serialize_user(
             user
         ),
@@ -384,7 +380,7 @@ def google_login(
     )
 
     # --------------------------------------------------------
-    # FIND GOOGLE USER
+    # FIND GOOGLE ACCOUNT
     # --------------------------------------------------------
 
     user = find_user_by_google_id(
@@ -392,7 +388,7 @@ def google_login(
     )
 
     # --------------------------------------------------------
-    # CREATE GOOGLE USER
+    # CREATE GOOGLE ACCOUNT
     # --------------------------------------------------------
 
     if not user:
@@ -433,7 +429,7 @@ def google_login(
         )
 
     # --------------------------------------------------------
-    # EXISTING GOOGLE USER
+    # EXISTING GOOGLE ACCOUNT
     # --------------------------------------------------------
 
     else:
@@ -451,6 +447,18 @@ def google_login(
             timezone_name=timezone_name,
         )
 
+    if user.get(
+        "disabled",
+        False,
+    ):
+        raise HTTPException(
+            status_code=(
+                status.HTTP_403_FORBIDDEN
+            ),
+            detail="Account disabled.",
+        )
+    if payload.guest_id:
+        pass
     return create_authenticated_session(
         user,
         response,
@@ -467,19 +475,23 @@ def email_signup(
     request: Request,
     response: Response,
 ):
-    validate_origin(
-        request
-    )
+    validate_origin(request)
 
-    email = str(
-        payload.email
-    ).lower().strip()
+    email = (
+        str(payload.email)
+        .lower()
+        .strip()
+    )
 
     timezone_name = (
         validate_timezone(
             payload.timezone
         )
     )
+
+    # --------------------------------------------------------
+    # PREVENT DUPLICATE EMAIL ACCOUNTS
+    # --------------------------------------------------------
 
     existing_user = (
         find_user_by_email(
@@ -494,19 +506,31 @@ def email_signup(
             ),
             detail=(
                 "An account with this email "
-                "already exists."
+                "already exists. Please sign "
+                "in using the original method."
             ),
         )
 
-    verification_token = (
-        secrets.token_urlsafe(48)
-    )
+    # --------------------------------------------------------
+    # HASH PASSWORD
+    # --------------------------------------------------------
 
-    password_hash = (
-        hash_password(
-            payload.password
+    try:
+        password_hash = (
+            hash_password(
+                payload.password
+            )
         )
-    )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    # --------------------------------------------------------
+    # CREATE USER
+    # --------------------------------------------------------
 
     try:
         user = create_email_user(
@@ -517,56 +541,25 @@ def email_signup(
             name=payload.name,
 
             timezone_name=timezone_name,
-
-            verification_token=
-                verification_token,
         )
-
-    except Exception:
+        if payload.guest_id:
+            pass
+    except Exception as exc:
         raise HTTPException(
             status_code=500,
             detail=(
                 "Unable to create account."
             ),
-        )
-
-    verification_url = (
-        f"{FRONTEND_URL}"
-        f"{EMAIL_VERIFY_PATH}"
-        f"?token="
-        f"{quote(verification_token)}"
-    )
-
-    try:
-        send_verification_email(
-            email,
-            verification_url,
-        )
-
-    except Exception as exc:
-        delete_user_by_id(
-            str(
-                user["_id"]
-            )
-        )
-
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Unable to send verification "
-                "email. Please try again."
-            ),
         ) from exc
 
-    return {
-        "success": True,
+    # --------------------------------------------------------
+    # IMMEDIATELY AUTHENTICATE
+    # --------------------------------------------------------
 
-        "message": (
-            "Account created. "
-            "Please check your email "
-            "to verify your account."
-        ),
-    }
+    return create_authenticated_session(
+        user,
+        response,
+    )
 
 
 # ============================================================
@@ -579,13 +572,13 @@ def email_login(
     request: Request,
     response: Response,
 ):
-    validate_origin(
-        request
-    )
+    validate_origin(request)
 
-    email = str(
-        payload.email
-    ).lower().strip()
+    email = (
+        str(payload.email)
+        .lower()
+        .strip()
+    )
 
     user = find_user_by_email(
         email
@@ -641,20 +634,6 @@ def email_login(
             ),
         )
 
-    if not user.get(
-        "email_verified",
-        False,
-    ):
-        raise HTTPException(
-            status_code=(
-                status.HTTP_403_FORBIDDEN
-            ),
-            detail=(
-                "Please verify your email "
-                "before signing in."
-            ),
-        )
-
     user = update_email_login(
         str(
             user["_id"]
@@ -666,200 +645,53 @@ def email_login(
         response,
     )
 
-
 # ============================================================
-# EMAIL VERIFICATION — API
+# GUEST SESSION
 # ============================================================
-
-@router.post("/email/verify")
-def verify_email(
-    payload: VerifyEmailRequest,
+@router.post("/guest")
+def guest_login(
     request: Request,
+    payload: GuestSessionRequest | None = None,
 ):
     validate_origin(
         request
     )
 
-    user = verify_email_token(
-        payload.token
+    timezone_name = validate_timezone(
+        payload.timezone if payload else None
     )
 
-    if not user:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Verification link is "
-                "invalid or expired."
-            ),
-        )
-
-    return {
-        "success": True,
-
-        "message": (
-            "Email verified successfully."
-        ),
-    }
-
-
-# ============================================================
-# EMAIL VERIFICATION — BROWSER LINK
-# ============================================================
-
-@router.get("/email/verify")
-def verify_email_from_link(
-    token: str,
-):
-    user = verify_email_token(
-        token
+    guest_id = (
+        payload.guest_id.strip()
+        if payload
+        and payload.guest_id
+        and payload.guest_id.strip()
+        else create_guest_id()
     )
 
-    if user:
-        return RedirectResponse(
-            url=(
-                f"{FRONTEND_URL}"
-                f"{EMAIL_VERIFY_PATH}"
-                "?status=success"
-            ),
-            status_code=303,
-        )
-
-    return RedirectResponse(
-        url=(
-            f"{FRONTEND_URL}"
-            f"{EMAIL_VERIFY_PATH}"
-            "?status=error"
-        ),
-        status_code=303,
-    )
-
-
-# ============================================================
-# FORGOT PASSWORD
-# ============================================================
-
-@router.post("/email/forgot-password")
-def forgot_password(
-    payload: ForgotPasswordRequest,
-    request: Request,
-):
-    validate_origin(
-        request
-    )
-
-    email = str(
-        payload.email
-    ).lower().strip()
-
-    user = find_user_by_email(
-        email
-    )
-
-    # Always return the same response so
-    # this endpoint does not reveal whether
-    # a particular email exists.
-    generic_response = {
-        "success": True,
-
-        "message": (
-            "If an account exists for this "
-            "email, a password reset link "
-            "has been sent."
-        ),
-    }
-
-    if not user:
-        return generic_response
-
-    if not user.get(
-        "password_hash"
-    ):
-        return generic_response
-
-    reset_token = (
-        secrets.token_urlsafe(48)
-    )
-
-    create_password_reset_token(
-        str(
-            user["_id"]
-        ),
-        reset_token,
-    )
-
-    reset_url = (
-        f"{FRONTEND_URL}"
-        f"{PASSWORD_RESET_PATH}"
-        f"?token="
-        f"{quote(reset_token)}"
-    )
-
-    try:
-        send_password_reset_email(
-            email,
-            reset_url,
-        )
-
-    except Exception:
-        # Do not expose provider details.
-        # The endpoint still returns the
-        # generic response.
-        return generic_response
-
-    return generic_response
-
-
-# ============================================================
-# RESET PASSWORD
-# ============================================================
-
-@router.post("/email/reset-password")
-def reset_password_route(
-    payload: ResetPasswordRequest,
-    request: Request,
-):
-    validate_origin(
-        request
-    )
-
-    password_hash = (
-        hash_password(
-            payload.password
-        )
-    )
-
-    user = reset_password(
-        payload.token,
-        password_hash,
-    )
-
-    if not user:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Password reset link is "
-                "invalid or expired."
-            ),
-        )
-
-    # Password reset is a security event.
-    # Kill all existing persistent sessions.
-    revoke_all_user_sessions(
-        str(
-            user["_id"]
+    access_token = (
+        create_guest_access_token(
+            guest_id,
+            timezone_name,
         )
     )
 
     return {
-        "success": True,
+        "access_token": access_token,
 
-        "message": (
-            "Password reset successfully. "
-            "Please sign in again."
-        ),
+        "token_type": "bearer",
+
+        "guest": True,
+
+        "user": {
+            "id": guest_id,
+            "email": "",
+            "name": "Guest",
+            "picture": None,
+            "plan": "guest",
+            "timezone": timezone_name,
+        },
     }
-
-
 # ============================================================
 # REFRESH ACCESS TOKEN
 # ============================================================
@@ -869,9 +701,7 @@ def refresh_access_token(
     request: Request,
     response: Response,
 ):
-    validate_origin(
-        request
-    )
+    validate_origin(request)
 
     raw_refresh_token = (
         request.cookies.get(
@@ -931,9 +761,7 @@ def refresh_access_token(
             status_code=(
                 status.HTTP_401_UNAUTHORIZED
             ),
-            detail=(
-                "Account unavailable"
-            ),
+            detail="Account unavailable",
         )
 
     rotated = rotate_session(
@@ -955,10 +783,9 @@ def refresh_access_token(
             ),
         )
 
-    (
-        session_id,
-        new_refresh_token,
-    ) = rotated
+    session_id, new_refresh_token = (
+        rotated
+    )
 
     access_token = (
         create_access_token(
@@ -992,9 +819,7 @@ def logout(
     request: Request,
     response: Response,
 ):
-    validate_origin(
-        request
-    )
+    validate_origin(request)
 
     raw_refresh_token = (
         request.cookies.get(
@@ -1012,7 +837,7 @@ def logout(
     )
 
     return {
-        "success": True
+        "success": True,
     }
 
 
@@ -1023,7 +848,7 @@ def logout(
 @router.get("/me")
 def get_me(
     current_user=Depends(
-        get_current_user
+        get_current_identity
     ),
 ):
     return {
@@ -1031,7 +856,6 @@ def get_me(
             current_user
         )
     }
-
 
 # ============================================================
 # TIMEZONE

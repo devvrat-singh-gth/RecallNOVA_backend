@@ -4,7 +4,7 @@ from app.utils.hash_utils import generate_hash
 from app.db.mongo import documents
 from app.settings import MAX_PDF_MB
 from bson import ObjectId
-
+from datetime import datetime, timezone
 
 
 def extract_text_from_pdf(content):
@@ -34,9 +34,22 @@ def extract_text_from_pdf(content):
         "pages": pages,
         "total_pages": len(pages)
     }
+def is_guest_user(
+    user_id: str,
+) -> bool:
 
-def process_pdf(file: UploadFile, user_id):
-    content = file.file.read()   # 🔥 FIX
+    return str(
+        user_id
+    ).startswith(
+        "guest_"
+    )
+
+def process_pdf(file: UploadFile, content: bytes, user_id):
+
+    if not content:
+        return {
+            "error": "Uploaded PDF is empty."
+        }
 
     if len(content) > MAX_PDF_MB * 1024 * 1024:
         return {"error": "File too large"}
@@ -50,8 +63,18 @@ def process_pdf(file: UploadFile, user_id):
 
     if existing:
         return {"message": "Already uploaded"}
-    pdf_data = extract_text_from_pdf(content)
+    try:
+        pdf_data = extract_text_from_pdf(content)
 
+    except Exception as error:
+        print(
+            "PDF EXTRACTION FAILED:",
+            error
+        )
+
+        return {
+            "error": "Invalid or corrupted PDF file."
+        }
     if not pdf_data["text"]:
         return {
             "error":
@@ -64,6 +87,16 @@ def process_pdf(file: UploadFile, user_id):
 
         "user_id": user_id,
 
+        "guest_data":
+            is_guest_user(
+                user_id
+            ),
+
+        "created_at":
+            datetime.now(
+                timezone.utc
+            ),
+
         "hash": doc_hash,
 
         "text": pdf_data["text"],
@@ -71,7 +104,9 @@ def process_pdf(file: UploadFile, user_id):
         "pages": pdf_data["pages"],
 
         "total_pages":
-        pdf_data["total_pages"],
+            pdf_data[
+                "total_pages"
+            ],
 
         "name": filename,
 

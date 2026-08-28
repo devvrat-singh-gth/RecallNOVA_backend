@@ -11,7 +11,14 @@ load_dotenv(dotenv_path=ENV_PATH)
 MONGO_URI = os.getenv("MONGO_URI")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-PINECONE_INDEX = os.getenv("PINECONE_INDEX")
+PINECONE_INDEX_NAME = os.getenv(
+    "PINECONE_INDEX_NAME"
+)
+
+# Backward-compatible alias
+PINECONE_INDEX = (
+    PINECONE_INDEX_NAME
+)
 HF_API_KEY = os.getenv("HF_API_KEY")
 REDIS_URL = os.getenv("REDIS_URL")
 

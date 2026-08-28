@@ -1,31 +1,11 @@
 # app/main.py
 
-from dotenv import load_dotenv
-
 import os
 
-
-BASE_DIR = os.path.dirname(
-    os.path.dirname(
-        os.path.dirname(
-            __file__
-        )
-    )
-)
-
-ENV_PATH = os.path.join(
-    BASE_DIR,
-    ".env"
-)
-
-load_dotenv(
-    ENV_PATH
-)
-
-
 from fastapi import FastAPI
+
 from fastapi.middleware.cors import (
-    CORSMiddleware
+    CORSMiddleware,
 )
 
 from app.routes import (
@@ -33,15 +13,11 @@ from app.routes import (
     chat,
     document,
     learning,
+    usage,
 )
+
 from app.routes.dashboard import (
-    router as dashboard_router
-)
-
-
-app = FastAPI(
-    title="RecallNova AI Backend",
-    version="1.0.0"
+    router as dashboard_router,
 )
 
 
@@ -53,6 +29,12 @@ if not FRONTEND_URL:
     raise RuntimeError(
         "FRONTEND_URL is not configured"
     )
+
+
+app = FastAPI(
+    title="RecallNova AI Backend",
+    version="1.0.0",
+)
 
 
 app.add_middleware(
@@ -76,7 +58,6 @@ app.add_middleware(
     allow_headers=[
         "Authorization",
         "Content-Type",
-        "X-CSRF-Token",
     ],
 )
 
@@ -84,50 +65,56 @@ app.add_middleware(
 app.include_router(
     auth.router,
     prefix="/auth",
-    tags=["Auth"]
+    tags=["Auth"],
 )
 
 app.include_router(
     chat.router,
     prefix="/chat",
-    tags=["Chat"]
+    tags=["Chat"],
 )
 
 app.include_router(
     document.router,
     prefix="/documents",
-    tags=["Documents"]
+    tags=["Documents"],
 )
 
 app.include_router(
     learning.router,
     prefix="/learning",
-    tags=["Learning"]
+    tags=["Learning"],
+)
+
+app.include_router(
+    usage.router,
+    prefix="/usage",
+    tags=["Usage"],
 )
 
 app.include_router(
     dashboard_router,
     prefix="/dashboard",
-    tags=["Dashboard"]
+    tags=["Dashboard"],
 )
 
 
 @app.get("/")
 def home():
-
     return {
         "status":
             "Backend running",
+
         "service":
             "RecallNova AI",
+
         "version":
-            "1.0"
+            "1.0",
     }
 
 
 @app.on_event("startup")
 def startup_event():
-
     print(
         "🚀 RecallNova backend started"
     )

@@ -8,9 +8,8 @@ from fastapi import (
 from app.db.mongo import db
 
 from app.dependencies.auth import (
-    get_current_user
+    get_current_identity
 )
-
 
 router = APIRouter()
 
