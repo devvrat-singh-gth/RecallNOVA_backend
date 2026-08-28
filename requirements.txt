@@ -12,5 +12,6 @@ resend
 PyPDF2
 PyJWT
 cryptography
+langchain-groq
 google-auth
 google-auth-oauthlib
