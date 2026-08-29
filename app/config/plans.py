@@ -43,7 +43,7 @@ PLANS = {
             },
 
             "flashcard_generations": {
-                "daily": 10,
+                "daily": 20,
                 "monthly": 200,
             },
 
