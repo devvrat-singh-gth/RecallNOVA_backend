@@ -59,7 +59,8 @@ router = APIRouter()
 
 def generate_title(
     question: str,
-    doc_id=None
+    doc_id=None,
+    user_id=None
 ):
 
     title = question.strip()
@@ -82,9 +83,7 @@ def generate_title(
                 if name.lower().endswith(".pdf"):
                     name = name[:-4]
 
-                return (
-                    f"{name} • {title}"
-                )
+                return f"{name} • {title}"
 
         except (
             InvalidId,
@@ -196,9 +195,9 @@ current_user=Depends(
 
                 "title": generate_title(
                     req.question,
-                    req.doc_id
+                    req.doc_id,
+                    user_id
                 ),
-
                 "created_at": now,
 
                 "updated_at": now,
@@ -286,10 +285,11 @@ FINAL ANSWER:
         {
             "$setOnInsert": {
 
-                "title": generate_title(
-                    req.question,
-                    req.doc_id
-                ),
+            "title": generate_title(
+                req.question,
+                req.doc_id,
+                user_id
+            ),
 
                 "created_at": now,
 
