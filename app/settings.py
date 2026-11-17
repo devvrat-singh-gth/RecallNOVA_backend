@@ -8,7 +8,13 @@ ENV_PATH = os.path.join(BASE_DIR, ".env")
 load_dotenv(dotenv_path=ENV_PATH)
 
 # 🔥 ENV VARIABLES
+# ENV VARIABLES
 MONGO_URI = os.getenv("MONGO_URI")
+
+if not MONGO_URI:
+    raise RuntimeError(
+        "MONGO_URI is not configured. Set it in the environment."
+    )
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = os.getenv(

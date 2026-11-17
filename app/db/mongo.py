@@ -27,7 +27,16 @@ monthly_usage = db["monthly_usage"]
 
 subscriptions = db["subscriptions"]
 
+rate_limits = db["rate_limits"]
 
+# -------------------------
+# RATE LIMITS
+# -------------------------
+
+rate_limits.create_index(
+    "expires_at",
+    expireAfterSeconds=0,
+)
 # ============================================================
 # DOCUMENTS
 # ============================================================

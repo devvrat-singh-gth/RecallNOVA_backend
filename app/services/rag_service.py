@@ -62,7 +62,11 @@ def process_pdf(file: UploadFile, content: bytes, user_id):
     })
 
     if existing:
-        return {"message": "Already uploaded"}
+        return {
+            "message": "Already uploaded",
+            "doc_id": str(existing["_id"]),
+            "already_exists": True,
+        }
     try:
         pdf_data = extract_text_from_pdf(content)
 
@@ -253,30 +257,25 @@ def search_docs_by_id(
                     })
 
         else:
+            text = doc.get("text", "")
 
-            text = doc.get(
-                "text",
-                ""
-            )
+            for index in range(0, len(text), 1000):
+                chunk = text[index:index + 1000]
+                lower = chunk.lower()
 
-            lower = text.lower()
+                score = sum(
+                    3 for word in query_words
+                    if word in lower
+                )
 
-            score = 0
+                if query.strip().lower() in lower:
+                    score += 10
 
-            for word in query_words:
-
-                if word in lower:
-                    score += 3
-
-            if query.lower() in lower:
-                score += 10
-
-            if score > 0:
-
-                scored_chunks.append({
-                    "score": score,
-                    "chunk": text
-                })
+                if score > 0:
+                    scored_chunks.append({
+                        "score": score,
+                        "chunk": chunk
+                    })
 
     scored_chunks.sort(
         key=lambda x: x["score"],

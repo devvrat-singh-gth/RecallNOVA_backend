@@ -3,3 +3,6 @@ venv/
 __pycache__/
 *.pyc
 .DS_Store
+app.rar
+app.zip
+app/requirements.txt

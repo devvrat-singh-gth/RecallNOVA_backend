@@ -313,8 +313,10 @@ def create_authenticated_session(
 @router.post("/google")
 def google_login(
     payload: GoogleLoginRequest,
+    request: Request,
     response: Response,
 ):
+    validate_origin(request)
     try:
         google_info = (
             id_token.verify_oauth2_token(
@@ -326,15 +328,16 @@ def google_login(
             )
         )
 
-    except ValueError:
-        raise HTTPException(
-            status_code=(
-                status.HTTP_401_UNAUTHORIZED
-            ),
-            detail=(
-                "Invalid Google identity token"
-            ),
+    except ValueError as exc:
+        print(
+            "GOOGLE TOKEN VERIFICATION FAILED:",
+            str(exc),
         )
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Google identity token",
+        ) from exc
 
     google_id = google_info.get(
         "sub"
@@ -457,8 +460,7 @@ def google_login(
             ),
             detail="Account disabled.",
         )
-    if payload.guest_id:
-        pass
+    
     return create_authenticated_session(
         user,
         response,
@@ -535,15 +537,11 @@ def email_signup(
     try:
         user = create_email_user(
             email=email,
-
             password_hash=password_hash,
-
             name=payload.name,
-
             timezone_name=timezone_name,
         )
-        if payload.guest_id:
-            pass
+
     except Exception as exc:
         raise HTTPException(
             status_code=500,

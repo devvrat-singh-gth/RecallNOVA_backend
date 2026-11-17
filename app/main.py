@@ -13,6 +13,7 @@ from app.routes import (
     chat,
     document,
     learning,
+    storage,
     usage,
 )
 
@@ -98,6 +99,11 @@ app.include_router(
     tags=["Dashboard"],
 )
 
+app.include_router(
+    storage.router,
+    prefix="/storage",
+    tags=["Storage"],
+)
 
 @app.get("/")
 def home():
